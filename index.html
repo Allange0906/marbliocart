@@ -9,8 +9,8 @@
      SUPABASE_ANON_KEY : anon public key   (eyJ... 또는 sb_publishable_... 로 시작)
    비워 두면 게임 화면의 [온라인 대전] 탭에서 직접 입력할 수도 있어요.
    ※ service_role(secret) 키는 절대 넣지 마세요. */
-const SUPABASE_URL='https://drxhrqekdfjbwynqxioo.supabase.co';
-const SUPABASE_ANON_KEY='sb_publishable_xoqa-kCpNBFf9C1rMBv2TQ_BqBIEwCT';
+const SUPABASE_URL='';
+const SUPABASE_ANON_KEY='';
 const NET_HZ=10; // 방장이 상태를 보내는 초당 횟수 (무료 플랜이면 6~10 권장)
 </script>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -61,6 +61,8 @@ button{font-family:inherit}
 .clock{font-size:30px;font-weight:600;letter-spacing:.04em;font-variant-numeric:tabular-nums;color:var(--cyan);text-shadow:0 0 6px rgba(59,232,255,.5)}
 .phase{margin-top:2px;font:500 12px var(--font-b);color:var(--dim)}
 .phase.lag{color:var(--amber)}
+.netstat{margin-top:3px;font:500 11px var(--font-b);color:#4f6378}
+.netstat.bad{color:var(--amber)}
 .hud-tr{top:calc(14px + env(safe-area-inset-top,0px));right:calc(16px + env(safe-area-inset-right,0px));display:flex;flex-direction:column;align-items:flex-end;gap:6px}
 .view-chip{font:600 12px var(--font-b);padding:5px 10px;border:1px solid var(--vc,var(--cyan));color:var(--vc,var(--cyan));border-radius:4px;background:rgba(2,3,6,.7);text-shadow:0 0 4px var(--vc,var(--cyan))}
 .hud-tr .btn{pointer-events:auto}
@@ -290,6 +292,7 @@ details[open] summary .sec-h::after{content:" −"}
     <div class="hud hud-tl">
       <div class="clock" id="clock">00:00.00</div>
       <div class="phase" id="phase"></div>
+      <div class="netstat" id="netStat" hidden></div>
     </div>
     <div class="hud slot" id="slot">
       <div class="slot-win" id="slotWin"></div>
@@ -466,7 +469,7 @@ function sbConfig(){
 function makeSupabaseRoomApi(){
   const cfg=sbConfig();
   if(!cfg||!window.supabase||typeof window.supabase.createClient!=='function')return null;
-  const sb=window.supabase.createClient(cfg.url,cfg.key,{realtime:{params:{eventsPerSecond:40},heartbeatIntervalMs:15000,worker:true}});
+  const sb=window.supabase.createClient(cfg.url,cfg.key,{realtime:{params:{eventsPerSecond:30},heartbeatIntervalMs:15000,worker:true}});
   const myPeer=Math.random().toString(36).slice(2,12);
   return {join:name=>new Promise((resolve,reject)=>{
     const ch=sb.channel('mr-'+name,{config:{broadcast:{self:false,ack:false},presence:{key:myPeer}}});
@@ -474,7 +477,7 @@ function makeSupabaseRoomApi(){
     const extra=new Map(),seen=new Map(),handlers=[];
     const build=()=>{
       const st=ch.presenceState(),keys=new Set(Object.keys(st)),now=Date.now();keys.add(myPeer);
-      for(const [k,t] of seen)if(now-t<8000)keys.add(k);
+      for(const [k,t] of seen)if(now-t<30000)keys.add(k);
       const out=[];
       for(const k of keys){
         let pr;
@@ -486,11 +489,14 @@ function makeSupabaseRoomApi(){
     };
     const fire=()=>{pending=false;peers=build();const c={peers,joined:[],updated:peers,left:[]};for(const h of handlers.slice()){try{h(c);}catch(e){console.error(e);}}};
     const schedule=()=>{if(pending)return;pending=true;Promise.resolve().then(fire);};
-    const trackNow=()=>{const s={};for(const k in mine)if(k!=='g')s[k]=mine[k];if(Object.keys(s).length)ch.track({s}).catch(()=>{});};
-    const scheduleTrack=()=>{clearTimeout(trackTimer);trackTimer=setTimeout(trackNow,150);};
+    // presence (track) carries only identity fields and is written rarely: Supabase limits presence messages much harder than broadcast
+    const FAST={g:1,hb:1,buy:1};
+    const trackNow=()=>{const s={};for(const k in mine)if(!FAST[k])s[k]=mine[k];if(Object.keys(s).length)ch.track({s}).catch(()=>{});};
+    const scheduleTrack=()=>{clearTimeout(trackTimer);trackTimer=setTimeout(trackNow,1000);};
     // re-announce periodically so a dropped presence entry (after a reconnect) comes back
-    const keep=setInterval(()=>{trackNow();const d={};for(const k in mine)if(k!=='g')d[k]=mine[k];ch.send({type:'broadcast',event:'p',payload:{peer:myPeer,d}}).catch(()=>{});schedule();},10000);
+    const keep=setInterval(()=>{trackNow();const d={};for(const k in mine)if(!FAST[k]||k==='buy')d[k]=mine[k];ch.send({type:'broadcast',event:'p',payload:{peer:myPeer,d}}).catch(()=>{});},30000);
     ch.on('presence',{event:'sync'},schedule);
+    ch.on('system',{},m=>{try{const t=typeof m==='string'?m:JSON.stringify(m);if(/error|limit|too many|quota|rate/i.test(t)&&typeof api.onSystem==='function')api.onSystem(t.slice(0,160));}catch(e){}});
     ch.on('broadcast',{event:'p'},msg=>{
       const pl=msg&&msg.payload;if(!pl||typeof pl.peer!=='string'||pl.peer===myPeer||!pl.d||typeof pl.d!=='object')return;
       const nx=Object.assign({},extra.get(pl.peer)||{});
@@ -500,12 +506,12 @@ function makeSupabaseRoomApi(){
     const api={name,
       presence:async patch=>{
         mine=Object.assign({},mine);let slow=false;
-        for(const k in patch){if(patch[k]===null)delete mine[k];else mine[k]=patch[k];if(k!=='g')slow=true;}
+        for(const k in patch){if(patch[k]===null)delete mine[k];else mine[k]=patch[k];if(!FAST[k])slow=true;}
         ch.send({type:'broadcast',event:'p',payload:{peer:myPeer,d:patch}}).catch(()=>{});
         if(slow)scheduleTrack();schedule();
       },
       onPeers:h=>{handlers.push(h);Promise.resolve().then(fire);return()=>{const i=handlers.indexOf(h);if(i>=0)handlers.splice(i,1);};},
-      peers:()=>peers,connected:()=>true,
+      peers:()=>peers,connected:()=>true,onSystem:null,
       leave:async()=>{clearTimeout(trackTimer);clearInterval(keep);try{await ch.untrack();}catch(e){}try{await sb.removeChannel(ch);}catch(e){}}
     };
     ch.subscribe(status=>{
@@ -1507,12 +1513,19 @@ document.querySelectorAll('.speed button').forEach(b=>b.addEventListener('click'
   document.querySelectorAll('.speed button').forEach(x=>x.setAttribute('aria-pressed',x===b));
 }));
 
-// ---------- online battle: the room creator (host) runs the race and shares it through room presence;
-// everyone else renders the host's snapshot and sends item purchases in their own presence.
+// ---------- online battle
+// The host's page runs the race. Fast data (snapshot g, purchases buy, heartbeat hb) travels as broadcast;
+// only slow identity fields (uid, nm, jt, host) are kept in presence. Identity is a per-tab uid kept in
+// sessionStorage, so a reload keeps your marble. The host counts as alive while its snapshots arrive.
 const MAXON=16,ITEM_IDX=E.ORDER;
-const PUB_MIN=typeof NET_HZ==='number'&&NET_HZ>0?1/NET_HZ:.05;
-const net={api:null,room:null,code:'',host:false,client:false,me:null,hostPeer:null,members:[],roster:[],rid:0,myId:-1,
-  snap:null,snapAt:0,lastSnap:null,hostMiss:0,evSeq:0,evOut:[],lastEv:0,buyN:0,buys:[],lastBuy:{},bank:{},pubT:0,lobT:0};
+const NETMAX=typeof NET_HZ==='number'&&NET_HZ>0?NET_HZ:15;
+const MSG_BUDGET=typeof NET_HZ==='number'?60:300;   // realtime messages per second the room may generate
+const SIZE_CAP=typeof NET_HZ==='number'?12000:3600;
+const UID=(()=>{let u='';try{u=sessionStorage.getItem('nmr-uid')||'';}catch(e){}
+  if(!/^[a-z0-9]{8,16}$/.test(u)){u=Math.random().toString(36).slice(2,12).padEnd(10,'0');try{sessionStorage.setItem('nmr-uid',u);}catch(e){}}return u;})();
+const net={api:null,room:null,code:'',host:false,client:false,me:null,members:[],roster:[],rid:0,myId:-1,
+  buf:[],off:null,lastTs:-1,lastG:null,hostUid:'',lastGAt:0,joinAt:0,evSeq:0,evOut:[],lastEv:0,
+  buyN:0,buys:[],lastBuy:{},bank:{},pubT:0,lobT:0,roT:0,hbT:0,hz:NETMAX,penalty:0,inCount:0,rateIn:0,rateT:0,sys:''};
 let onlineName='';try{onlineName=localStorage.getItem('nmr-online-name')||'';}catch(e){}
 if(!onlineName)onlineName='플레이어'+Math.floor(100+Math.random()*900);
 const hashCode=((location.hash||'').match(/^#r-([a-z0-9]{4,8})$/)||[])[1]||'';
@@ -1520,8 +1533,14 @@ if(hashCode)mode='online';
 const EVC={pay:1,cant:2,coin:3,winner:4,hit:5,explode:6,horn:7,bolt:8,steal:9,chomp:10,spinyHit:11};
 const PK=['green','red','spiny','banana','bomb','fire','boom'];
 const setOnErr=t=>{$('onErr').textContent=t;};
+const HOSTKEY='nmr-host';
+function saveHostSession(){if(!net.host)return;try{sessionStorage.setItem(HOSTKEY,JSON.stringify({code:net.code,bank:net.bank,rid:net.rid}));}catch(e){}}
+function loadHostSession(code){try{const o=JSON.parse(sessionStorage.getItem(HOSTKEY)||'null');if(o&&o.code===code)return o;}catch(e){}return null;}
+function clearHostSession(){try{sessionStorage.removeItem(HOSTKEY);}catch(e){}}
+
 Promise.resolve(makeSupabaseRoomApi())
-  .then(r=>{net.api=r||null;renderOnline();if(hashCode&&net.api&&!net.room){$('onCode').value=hashCode.toUpperCase();joinRoom(hashCode,false);}})
+  .then(r=>{net.api=r||null;renderOnline();
+    if(hashCode&&net.api&&!net.room){$('onCode').value=hashCode.toUpperCase();const hs=loadHostSession(hashCode);joinRoom(hashCode,!!hs,hs);}})
   .catch(()=>{net.api=null;renderOnline();});
 
 function renderOnline(){
@@ -1537,18 +1556,21 @@ function renderOnline(){
     const r=document.createElement('div');r.className='mem';r.style.setProperty('--c',cssCol(i));
     r.innerHTML='<span class="dot"></span><span class="mn"></span><span class="mt"></span><span class="sbal"></span>';
     r.querySelector('.mn').textContent=String(p.presence.nm).slice(0,12);
-    const tags=[];if(p.presence.host===true)tags.push('방장');if(p.sameTab)tags.push('나');if(i>=MAXON)tags.push('관전');
+    const tags=[];if(p.presence.host===true)tags.push('방장');if(p.presence.uid===UID)tags.push('나');if(i>=MAXON)tags.push('관전');
     r.querySelector('.mt').textContent=tags.join(' · ');
-    const b=net.bank[p.peer];r.querySelector('.sbal').textContent=won(typeof b==='number'?b:E.START_CHIPS);
+    const b=net.bank[p.presence.uid];r.querySelector('.sbal').textContent=won(typeof b==='number'?b:E.START_CHIPS);
     box.appendChild(r);
   });
   $('onStart').hidden=!net.host;$('onStart').disabled=!net.members.length;
-  $('onWait').textContent=net.host?`${Math.min(net.members.length,MAXON)}명 참가${net.members.length>MAXON?` · ${net.members.length-MAXON}명은 관전`:''}`:(net.hostPeer?'방장이 시작하기를 기다리는 중…':'방장을 찾는 중…');
+  const hostSeen=net.lastGAt&&performance.now()-net.lastGAt<5000;
+  $('onWait').textContent=net.host?`${Math.min(net.members.length,MAXON)}명 참가${net.members.length>MAXON?` · ${net.members.length-MAXON}명은 관전`:''}`:(hostSeen?'방장이 시작하기를 기다리는 중…':'방장을 찾는 중…');
 }
+let nameT=0;
 $('onName').addEventListener('input',e=>{
   onlineName=e.target.value.trim().slice(0,12)||'플레이어';
   try{localStorage.setItem('nmr-online-name',onlineName);}catch(_){}
-  if(net.room)net.room.presence({nm:onlineName}).catch(()=>{});
+  // one presence update after typing stops (presence writes are rate-limited; per-keystroke writes got people kicked)
+  clearTimeout(nameT);nameT=setTimeout(()=>{if(net.room)net.room.presence({nm:onlineName}).catch(()=>{});},900);
 });
 $('sbSave').addEventListener('click',()=>{
   const u=$('sbUrl').value.trim().replace(/\/+$/,''),k=$('sbKey').value.trim();
@@ -1559,10 +1581,10 @@ $('sbSave').addEventListener('click',()=>{
 $('sbClear').addEventListener('click',()=>{try{localStorage.removeItem('nmr-sb-url');localStorage.removeItem('nmr-sb-key');}catch(e){}location.reload();});
 $('onCreate').addEventListener('click',()=>{
   const a='abcdefghjkmnpqrstuvwxyz23456789';let c='';for(let i=0;i<5;i++)c+=a[Math.floor(Math.random()*a.length)];
-  joinRoom(c,true);
+  joinRoom(c,true,null);
 });
-$('onEnter').addEventListener('click',()=>joinRoom($('onCode').value,false));
-$('onCode').addEventListener('keydown',e=>{if(e.key==='Enter')joinRoom($('onCode').value,false);});
+$('onEnter').addEventListener('click',()=>joinRoom($('onCode').value,false,null));
+$('onCode').addEventListener('keydown',e=>{if(e.key==='Enter')joinRoom($('onCode').value,false,null);});
 $('onLeave').addEventListener('click',()=>leaveRoom());
 $('onStart').addEventListener('click',()=>startOnline());
 const shareUrl=()=>location.origin+location.pathname+location.search+'#r-'+net.code;
@@ -1577,53 +1599,56 @@ $('copyCode').addEventListener('click',()=>{
   try{navigator.clipboard.writeText(t).then(done,()=>{const s=getSelection(),r=document.createRange();r.selectNodeContents($('rcode'));s.removeAllRanges();s.addRange(r);});}catch(e){}
 });
 
-async function joinRoom(code,asHost){
+async function joinRoom(code,asHost,sess){
   code=String(code||'').toLowerCase().trim();
   if(!/^[a-z0-9]{4,8}$/.test(code)){setOnErr('방 코드는 영문·숫자 4~8자예요');return;}
   if(!net.api){setOnErr('이 화면에서는 온라인 방에 연결할 수 없어요');return;}
-  if(net.room)await leaveRoom();
+  if(net.room)await leaveRoom(true);
   setOnErr('연결 중…');
   try{
     const r=await net.api.join('mr-'+code);
-    Object.assign(net,{room:r,code,host:asHost,client:!asHost,rid:0,hostMiss:0,snap:null,lastSnap:null,lastEv:0,evOut:[],evSeq:0,
-      buyN:0,buys:[],lastBuy:{},bank:{},hostPeer:null,myId:-1,members:[],roster:[]});
-    await r.presence({nm:onlineName,jt:Date.now(),host:asHost?true:null,buy:[]});
-    r.onPeers(ch=>{if(net.room===r)onRoomPeers(ch);},()=>{if(net.room===r){setOnErr('방 연결이 끊겼어요');leaveRoom();}});
+    Object.assign(net,{room:r,code,host:asHost,client:!asHost,rid:sess&&sess.rid||0,myId:-1,members:[],roster:[],
+      buf:[],off:null,lastTs:-1,lastG:null,hostUid:'',lastGAt:0,joinAt:performance.now(),evOut:[],lastEv:0,
+      buyN:0,buys:[],lastBuy:{},bank:sess&&sess.bank||{},penalty:0,sys:''});
+    if(typeof r.onSystem!=='undefined')r.onSystem=msg=>{net.sys=msg;if(/rate|limit|too many|quota/i.test(msg))net.penalty=30;};
+    await r.presence({uid:UID,nm:onlineName,jt:Date.now(),host:asHost?true:null,buy:[],hb:0});
+    r.onPeers(ch=>{if(net.room===r){try{onRoomPeers(ch);}catch(e){console.error(e);}}},()=>{});
     try{history.replaceState(null,'','#r-'+code);}catch(e){try{location.hash='r-'+code;}catch(_){}}
+    if(asHost)saveHostSession();
     setOnErr('');renderOnline();
-    if(!asHost)setTimeout(()=>{if(net.room===r&&!net.hostPeer&&!net.snap){leaveRoom();setOnErr('이 코드의 방을 찾지 못했어요. 코드를 확인하거나 방장에게 다시 받아 주세요');}},7000);
   }catch(e){setOnErr('방에 들어가지 못했어요'+(e&&e.code?` (${e.code})`:''));}
 }
-async function leaveRoom(){
-  const r=net.room;net.room=null;net.host=false;net.client=false;net.members=[];net.hostPeer=null;net.myId=-1;
+async function leaveRoom(quiet){
+  const r=net.room,wasHost=net.host;net.room=null;net.host=false;net.client=false;net.members=[];net.myId=-1;net.buf=[];
+  if(wasHost)clearHostSession();
   if(r){try{await r.leave();}catch(e){}}
-  try{history.replaceState(null,'',location.pathname+location.search);}catch(e){}
+  if(!quiet){try{history.replaceState(null,'',location.pathname+location.search);}catch(e){}}
   if(state!=='lobby')toLobby();else renderOnline();
+}
+function computeMembers(peers){
+  const byUid=new Map();
+  for(const p of peers){
+    const pr=p.presence;if(!pr||typeof pr.nm!=='string'||typeof pr.uid!=='string')continue;
+    const cur=byUid.get(pr.uid);
+    if(!cur||p.sameTab||(!cur.sameTab&&(Number(pr.jt)||0)>(Number(cur.presence.jt)||0)))byUid.set(pr.uid,p);
+  }
+  return [...byUid.values()].sort((a,b)=>(Number(a.presence.jt)||0)-(Number(b.presence.jt)||0));
 }
 function onRoomPeers(ch){
   const me=ch.peers.find(p=>p.sameTab);if(me)net.me=me.peer;
-  net.members=ch.peers.filter(p=>p.presence&&typeof p.presence.nm==='string').slice().sort((a,b)=>(Number(a.presence.jt)||0)-(Number(b.presence.jt)||0));
-  const h=net.members.filter(p=>p.presence.host===true)[0]||null;
-  if(net.host){
-    net.hostPeer=net.me;
-    for(const p of ch.updated.concat(ch.joined))if(!p.sameTab)takeBuys(p);
-  }else{
-    if(h){net.hostPeer=h.peer;net.hostMiss=0;}
-    else if(net.hostPeer&&!net.hostMiss)net.hostMiss=Date.now();
-    if(h&&h.presence.g&&h.presence.g!==net.lastSnap){net.lastSnap=h.presence.g;onHostSnap(h.presence.g);}
+  net.members=computeMembers(ch.peers);
+  if(net.host){for(const p of ch.peers)if(!p.sameTab)takeBuys(p);}
+  else{
+    const hosts=ch.peers.filter(p=>!p.sameTab&&p.presence&&p.presence.host===true&&p.presence.g);
+    hosts.sort((a,b)=>(Number(b.presence.jt)||0)-(Number(a.presence.jt)||0));
+    const h=hosts[0];
+    if(h&&h.presence.g!==net.lastG){net.lastG=h.presence.g;onHostSnap(h.presence.g);}
   }
   if(state==='lobby')renderOnline();
 }
-setInterval(()=>{
-  if(!net.room||net.host)return;
-  const now=Date.now(),snapAge=net.snap?performance.now()-net.snapAt:1e9;
-  if(net.hostMiss&&now-net.hostMiss>15000&&snapAge>15000){leaveRoom();setOnErr('방장과 연결이 끊겨 방이 닫혔어요');return;}
-  const lag=state!=='lobby'&&snapAge>2500;
-  $('phase').classList.toggle('lag',lag);if(lag)$('phase').textContent='방장 연결이 지연되고 있어요 · 다시 연결 중…';
-},1000);
 function takeBuys(p){
   const b=p.presence.buy;if(!Array.isArray(b))return;
-  const id=net.roster.findIndex(r=>r.peer===p.peer);let last=net.lastBuy[p.peer]||0;
+  const id=net.roster.findIndex(r=>r.uid===p.presence.uid);let last=net.lastBuy[p.peer]||0;
   for(const e of b){
     if(!Array.isArray(e))continue;const n=Number(e[0])|0,t=ITEM_IDX[Number(e[1])|0];
     if(n<=last)continue;last=n;
@@ -1631,16 +1656,16 @@ function takeBuys(p){
   }
   net.lastBuy[p.peer]=last;
 }
-function saveRoomBanks(){for(const m of E.marbles){const r=net.roster[m.id];if(r)net.bank[r.peer]=m.bank;}}
+function saveRoomBanks(){for(const m of E.marbles){const r=net.roster[m.id];if(r)net.bank[r.uid]=m.bank;}saveHostSession();}
 function startOnline(){
   if(!net.host||!net.room)return;
   if(net.roster.length&&E.marbles.length)saveRoomBanks();
-  net.roster=net.members.slice(0,MAXON).map(p=>({peer:p.peer,name:String(p.presence.nm).slice(0,12)||'플레이어'}));
-  net.rid++;net.evOut=[];net.myId=net.roster.findIndex(r=>r.peer===net.me);
+  net.roster=net.members.slice(0,MAXON).map(p=>({uid:p.presence.uid,name:String(p.presence.nm).slice(0,12)||'플레이어'}));
+  net.rid++;net.evOut=[];net.myId=net.roster.findIndex(r=>r.uid===UID);
   E.setMode('battle');
-  E.reset(net.roster.map(r=>({name:r.name,bank:typeof net.bank[r.peer]==='number'?net.bank[r.peer]:E.START_CHIPS,itemsOn:false,manual:true})));
-  enterRace();
-  state='grid';countdown=3.2;doneT=0;$('count').hidden=false;net.pubT=0;
+  E.reset(net.roster.map(r=>({name:r.name,bank:typeof net.bank[r.uid]==='number'?net.bank[r.uid]:E.START_CHIPS,itemsOn:false,manual:true})));
+  enterRace();saveHostSession();
+  state='grid';countdown=3.2;doneT=0;$('count').hidden=false;net.pubT=0;net.roT=0;
 }
 function enterRace(){
   buildView();clearRaceFx();buildItemBar();buildShop();
@@ -1651,8 +1676,8 @@ function enterRace(){
 }
 function startClient(g){
   net.rid=g.rid;
-  net.roster=(g.ro||[]).map(a=>({peer:String(a[0]),name:String(a[1]).slice(0,12)}));
-  net.myId=net.roster.findIndex(r=>r.peer===net.me);
+  net.roster=g.ro.map(a=>({uid:String(a[0]),name:String(a[1]).slice(0,12)}));
+  net.myId=net.roster.findIndex(r=>r.uid===UID);
   net.lastEv=Math.max(net.lastEv,...(g.e||[]).map(x=>x[0]||0));
   E.setMode('battle');
   E.reset(net.roster.map(r=>({name:r.name,bank:E.START_CHIPS,itemsOn:false,manual:true})));
@@ -1661,17 +1686,25 @@ function startClient(g){
 function toRoomLobby(){
   if(net.host&&E.marbles.length)saveRoomBanks();
   state='lobby';clearView();clearRaceFx();$('shop').hidden=true;stage.classList.remove('online');
-  $('banner').hidden=true;$('count').hidden=true;lobby.hidden=false;net.lobT=0;
+  $('banner').hidden=true;$('count').hidden=true;lobby.hidden=false;net.lobT=0;net.buf=[];
   setMode('online');
 }
 function onHostSnap(g){
+  if(!g||typeof g!=='object')return;
+  const now=performance.now();
+  net.lastGAt=now;net.inCount++;
+  if(g.hu&&g.hu!==net.hostUid){net.hostUid=g.hu;net.buf=[];net.off=null;net.lastTs=-1;}
   if(g.ph===0){
-    net.bank=g.bk&&typeof g.bk==='object'?g.bk:{};
+    net.bank=g.bk&&typeof g.bk==='object'?g.bk:{};net.buf=[];
     if(state!=='lobby')toRoomLobby();else renderOnline();
     return;
   }
-  if(g.rid!==net.rid)startClient(g);
-  net.snap=g;net.snapAt=performance.now();
+  if(typeof g.ts!=='number'||!Array.isArray(g.m))return;
+  if(g.ts<net.lastTs-2000){net.buf=[];net.off=null;}
+  net.lastTs=g.ts;
+  const s=now-g.ts;if(net.off==null||s<net.off)net.off=s;else net.off+=Math.min(2,(s-net.off)*.02);
+  if(g.rid!==net.rid){if(!Array.isArray(g.ro))return;startClient(g);net.buf=[];}
+  net.buf.push({g,at:now});if(net.buf.length>10)net.buf.shift();
   for(const x of g.e||[]){if(!Array.isArray(x)||x[0]<=net.lastEv)continue;net.lastEv=x[0];const ev=decodeEv(x);if(ev)E.events.push(ev);}
   const st=g.ph===1?'grid':g.ph===2?'racing':'done',c=$('count');
   if(st==='grid'){c.hidden=false;c.style.color='';}
@@ -1683,7 +1716,7 @@ function decodeEv(x){
   const m=E.marbles.find(o=>o.id===x[2]);
   switch(k){
     case 'pay':return m&&ITEM_IDX[x[3]]?{k,m,t:ITEM_IDX[x[3]],c:x[4]}:null;
-    case 'cant':return m&&ITEM_IDX[x[3]]?{k,m,t:ITEM_IDX[x[3]]}:null;
+    case 'cant':return m&&m.id===net.myId&&ITEM_IDX[x[3]]?{k,m,t:ITEM_IDX[x[3]]}:null;
     case 'coin':return m?{k,m,a:x[3]}:null;
     case 'explode':return {k,x:x[3]/10,z:x[4]/10,R:x[5]/10};
     case 'steal':{const v=E.marbles.find(o=>o.id===x[3]);return m&&v&&ITEM_IDX[x[4]]?{k,m,v,t:ITEM_IDX[x[4]]}:null;}
@@ -1698,53 +1731,109 @@ function netOutEvent(ev){
   else if(ev.k==='coin')x.push(ev.a);
   else if(ev.k==='explode')x.push(Math.round(ev.x*10),Math.round(ev.z*10),Math.round(ev.R*10));
   else if(ev.k==='steal')x.push(ev.v.id,ITEM_IDX.indexOf(ev.t));
-  net.evOut.push(x);if(net.evOut.length>12)net.evOut.shift();
+  net.evOut.push(x);if(net.evOut.length>24)net.evOut.shift();
 }
-function encodeSnap(){
+function targetHz(){
+  const n=Math.max(2,net.members.length);
+  let hz=Math.min(NETMAX,Math.floor(MSG_BUDGET/n));
+  if(net.penalty>0)hz=Math.floor(hz/2);
+  return Math.max(2,hz);
+}
+function encodeSnap(withRo){
   const q=v=>Math.round(v*10);
   const m=E.marbles.map(o=>{const s=o.st,f=(s.spin>0?1:0)|(s.boost>0?2:0)|(s.star>0?4:0)|(s.bullet>0?8:0)|(s.shrink>0?16:0)|(s.ghost>0?32:0)|(s.chomp>0?64:0);
     return [o.id,q(o.x),q(o.z),q(o.prog),q(o.vx),q(o.vz),q(o.hop),f,o.bank,o.finishRank,q(o.finishTime),o.spent];});
-  const p=E.projs.slice(0,24).map(o=>[o.id,PK.indexOf(o.kind),q(o.x),q(o.z),q(o.kind==='spiny'?o.sp:o.prog),o.fuse!=null?Math.round(o.fuse*10):0]);
-  return {ph:state==='grid'?1:state==='racing'?2:3,rid:net.rid,ro:net.roster.map(r=>[r.peer,r.name]),cd:Math.max(0,Math.round(countdown*10)),
+  const p=E.projs.slice(0,30).map(o=>[o.id,PK.indexOf(o.kind),q(o.x),q(o.z),q(o.kind==='spiny'?o.sp:o.prog),o.fuse!=null?Math.round(o.fuse*10):0]);
+  const g={ph:state==='grid'?1:state==='racing'?2:3,rid:net.rid,hu:UID,ts:Math.round(performance.now()),hz:net.hz,cd:Math.max(0,Math.round(countdown*10)),
     t:Math.round(E.time*100),fc:E.finished,w:E.winner?E.winner.id:-1,hs:speed,sp:E.spinners.map(s=>Math.round((s.a%(Math.PI*2))*100)),m,p,e:net.evOut.slice()};
+  if(withRo)g.ro=net.roster.map(r=>[r.uid,r.name]);
+  return g;
 }
 function publishSnap(dt){
   if(!net.host||!net.room)return;
+  if(net.penalty>0)net.penalty=Math.max(0,net.penalty-dt);
   let g;
-  if(state==='lobby'){net.lobT-=dt;if(net.lobT>0)return;net.lobT=1;
-    const bk={};for(const p of net.members)bk[p.peer]=typeof net.bank[p.peer]==='number'?net.bank[p.peer]:E.START_CHIPS;g={ph:0,bk};}
-  else{net.pubT-=dt;if(net.pubT>0)return;net.pubT=Math.max(PUB_MIN,net.members.length/80);g=encodeSnap();
-    while(JSON.stringify(g).length>3600&&(g.p.length||g.e.length)){if(g.p.length)g.p.pop();else g.e.shift();}}
+  if(state==='lobby'){
+    net.lobT-=dt;if(net.lobT>0)return;net.lobT=1;
+    const bk={};for(const p of net.members){const u=p.presence.uid;bk[u]=typeof net.bank[u]==='number'?net.bank[u]:E.START_CHIPS;}
+    g={ph:0,bk,hu:UID,ts:Math.round(performance.now())};
+  }else{
+    net.pubT-=dt;net.roT-=dt;if(net.pubT>0)return;
+    net.hz=targetHz();net.pubT=1/net.hz;
+    const withRo=state==='grid'||net.roT<=0;if(withRo)net.roT=1.5;
+    g=encodeSnap(withRo);
+    while(JSON.stringify(g).length>SIZE_CAP&&(g.p.length||g.e.length)){if(g.p.length)g.p.pop();else g.e.shift();}
+  }
   net.room.presence({g}).catch(()=>{});
 }
+// client heartbeat: re-sends purchases and keeps us visible even if a presence update was dropped
+setInterval(()=>{if(net.room&&!net.host)net.room.presence({hb:Date.now()%100000,buy:net.buys.slice()}).catch(()=>{});},4000);
+// client watchdog + network status line
+setInterval(()=>{
+  const el=$('netStat');
+  if(!net.room||mode!=='online'){el.hidden=true;return;}
+  const now=performance.now();
+  net.rateIn=net.inCount;net.inCount=0;
+  if(net.host){el.hidden=state==='lobby';el.className='netstat';el.textContent=`방장 · 상태 전송 ${state==='lobby'?1:net.hz}회/초 · ${net.members.length}명${net.penalty>0?' · 전송량 제한 감지, 속도 낮춤':''}`;return;}
+  const since=net.lastGAt?now-net.lastGAt:now-net.joinAt;
+  if(!net.lastGAt&&since>12000){leaveRoom();setOnErr('이 코드의 방을 찾지 못했어요. 코드를 확인하거나 방장에게 다시 받아 주세요');return;}
+  if(net.lastGAt&&since>25000){leaveRoom();setOnErr('방장과 연결이 끊겨 방이 닫혔어요');return;}
+  if(state==='lobby'){el.hidden=true;renderOnline();return;}
+  el.hidden=false;
+  const bad=since>2500;
+  el.className='netstat'+(bad?' bad':'');
+  el.textContent=bad?`방장 신호가 ${Math.round(since/1000)}초째 없어요 · 다시 연결 중…`:`수신 ${net.rateIn}회/초${net.sys?' · '+net.sys.slice(0,60):''}`;
+},1000);
 function clientApply(){
-  const g=net.snap;if(!g)return;
-  E.applyRemote(g);
-  const age=Math.min(.3,(performance.now()-net.snapAt)/1000)*(g.hs||1);
-  for(const m of E.marbles){
-    m.x+=m.vx*age;m.z+=m.vz*age;m.prog+=(m.vx*T.TX[m.idx]+m.vz*T.TZ[m.idx])*age;
+  const b=net.buf;if(!b.length)return;
+  const latest=b[b.length-1].g;
+  E.applyRemote(latest);
+  countdown=(latest.cd||0)/10;
+  const hz=latest.hz||10,delay=1000/hz*1.6+60;
+  const rt=performance.now()-(net.off||0)-delay;
+  let A=b[b.length-1],B=null,f=0;
+  if(rt<latest.ts){
+    let k=b.length-2;while(k>0&&b[k].g.ts>rt)k--;
+    if(k>=0&&b[k].g.ts<=rt){A=b[k];B=b[k+1];f=Math.max(0,Math.min(1,(rt-A.g.ts)/Math.max(1,B.g.ts-A.g.ts)));}
+    else A=b[0];
   }
-  E.setProjs((g.p||[]).map(a=>({id:'n'+a[0],kind:PK[a[1]]||'green',x:a[2]/10,z:a[3]/10,prog:a[4]/10,sp:a[4]/10,fuse:a[5]/10})));
-  countdown=(g.cd||0)/10;
+  const ga=A.g,hs=ga.hs||1,rowsB=B?new Map(B.g.m.map(r=>[r[0],r])):null;
+  const span=B?(B.g.ts-ga.ts)/1000*hs:0,ext=B?0:Math.min(.35,Math.max(0,(rt-ga.ts)/1000))*hs;
+  const H=(p0,m0,p1,m1,t)=>{const t2=t*t,t3=t2*t;return (2*t3-3*t2+1)*p0+(t3-2*t2+t)*m0+(-2*t3+3*t2)*p1+(t3-t2)*m1;};
+  for(const a of ga.m){
+    const m=E.marbles.find(o=>o.id===a[0]);if(!m)continue;
+    let x=a[1]/10,z=a[2]/10,pg=a[3]/10,vx=a[4]/10,vz=a[5]/10,hop=a[6]/10;
+    const c=rowsB&&rowsB.get(a[0]);
+    if(c){
+      const bx=c[1]/10,bz=c[2]/10,bvx=c[4]/10,bvz=c[5]/10;
+      if(Math.hypot(bx-x,bz-z)>60){x=bx;z=bz;pg=c[3]/10;}
+      else{x=H(x,vx*span,bx,bvx*span,f);z=H(z,vz*span,bz,bvz*span,f);pg+=(c[3]/10-pg)*f;hop+=(c[6]/10-hop)*f;vx+=(bvx-vx)*f;vz+=(bvz-vz)*f;}
+    }else if(ext>0){x+=vx*ext;z+=vz*ext;pg+=Math.hypot(vx,vz)*ext;}
+    m.x=x;m.z=z;m.prog=pg;m.vx=vx;m.vz=vz;m.hop=Math.max(0,hop);m.idx=Math.max(0,Math.min(T.N-1,Math.round(pg)));
+  }
+  const spA=ga.sp||[],spB=B&&B.g.sp||spA;
+  E.spinners.forEach((s,i)=>{const a0=(spA[i]||0)/100;let d=((spB[i]||0)/100-a0)%(Math.PI*2);if(Math.sign(d)!==Math.sign(s.w)&&d!==0)d+=Math.sign(s.w)*Math.PI*2;s.a=a0+d*f+s.w*ext;});
+  const pA=new Map((ga.p||[]).map(a=>[a[0],a])),src=B?B.g.p||[]:ga.p||[];
+  E.setProjs(src.map(a=>{const o=B&&pA.get(a[0]);const lx=o?o[2]+(a[2]-o[2])*f:a[2],lz=o?o[3]+(a[3]-o[3])*f:a[3],lp=o?o[4]+(a[4]-o[4])*f:a[4];
+    return {id:'n'+a[0],kind:PK[a[1]]||'green',x:lx/10,z:lz/10,prog:lp/10,sp:lp/10,fuse:a[5]/10};}));
 }
-// shop (bottom-left): unlimited instant purchases while money lasts
+// shop (bottom-left): unlimited instant purchases while money lasts (no coin: it would be free money)
 function buildShop(){
   const s=$('shop');s.hidden=false;
   s.innerHTML=`<div class="shop-h"><span class="sec-h">아이템 상점 · 누르면 즉시 사용</span><span class="shop-bal" id="shopBal"></span></div><div class="shop-g" id="shopG"></div>`;
   const g=$('shopG');
   for(const t of E.ORDER.filter(x=>x!=='coin')){
     const b=document.createElement('button');b.type='button';b.className='sb';b.dataset.t=t;
-    const c=E.cost(t);b.innerHTML=`${icon(t,18)}<span class="n"></span><span class="p">${c?won(c):'무료'}</span>`;
+    const c=E.cost(t);b.innerHTML=`${icon(t,18)}<span class="n"></span><span class="p">${won(c)}</span>`;
     b.querySelector('.n').textContent=IT[t].n;b.title=`${IT[t].n} · ${IT[t].d}`;
     b.addEventListener('click',()=>shopBuy(t));g.appendChild(b);
   }
   updateShop();
 }
 function shopBuy(t){
-  if(t==='coin')return;
-  if(state!=='racing'||net.myId<0)return;
+  if(t==='coin'||state!=='racing'||net.myId<0)return;
   if(net.host){E.buy(net.myId,t);return;}
-  net.buyN++;net.buys.push([net.buyN,ITEM_IDX.indexOf(t)]);if(net.buys.length>8)net.buys.shift();
+  net.buyN++;net.buys.push([net.buyN,ITEM_IDX.indexOf(t)]);if(net.buys.length>10)net.buys.shift();
   if(net.room)net.room.presence({buy:net.buys.slice()}).catch(()=>{});
 }
 function updateShop(){
@@ -1753,12 +1842,19 @@ function updateShop(){
   $('shopBal').textContent=m?'내 잔액 '+won(m.bank):'관전 중';
   document.querySelectorAll('#shopG .sb').forEach(b=>{const c=E.cost(b.dataset.t);b.disabled=!m||m.finished||state!=='racing'||m.bank<c;});
 }
+// host keeps simulating when its tab is hidden (requestAnimationFrame stops there); worker timers are not throttled
+let bgLast=0,lastFrameAt=performance.now();
+try{
+  const bw=new Worker(URL.createObjectURL(new Blob(['setInterval(function(){postMessage(0)},50)'],{type:'text/javascript'})));
+  bw.onmessage=()=>{const now=performance.now(),dt=Math.min(.25,bgLast?(now-bgLast)/1000:.05);bgLast=now;
+    // take over whenever the page stops painting (hidden tab, minimised or covered window)
+    if(net.host&&net.room&&now-lastFrameAt>200){try{simulate(dt);}catch(e){console.error(e);}}};
+}catch(e){}
 
 // ---------- loop
 const pj=V3(0,0,0),dq=new THREE.Quaternion(),ax=V3(0,0,0),UP=V3(0,1,0);
 let last=performance.now(),listT=0;
-function tick(now){
-  const dt=Math.min(.05,Math.max(0,(now-last)/1000));last=now;
+function simulate(dt){
   if(net.client&&state!=='lobby'){clientApply();if(state==='grid'){$('count').hidden=false;$('count').textContent=Math.max(1,Math.ceil(Math.min(3,countdown)));}}
   else if(state==='grid'){
     countdown-=dt;const c=$('count');
@@ -1772,6 +1868,16 @@ function tick(now){
     if(E.finished>=E.marbles.length)state='done';
     else if(E.winner){doneT+=dt*speed;if(doneT>35)state='done';}
   }
+}
+let loopErr=0;
+function tick(now){
+  requestAnimationFrame(tick);            // schedule first: an error below can never stop the loop
+  lastFrameAt=performance.now();
+  const dt=Math.min(.05,Math.max(0,(now-last)/1000));last=now;
+  try{simulate(dt);render(dt,now);}
+  catch(e){console.error(e);if(now-loopErr>3000){loopErr=now;const el=$('netStat');el.hidden=false;el.className='netstat bad';el.textContent='화면 갱신 오류: '+String(e&&e.message||e).slice(0,80);}}
+}
+function render(dt,now){
   const t=now/1000;
   E.spinners.forEach((s,i)=>{spinMeshes[i].rotation.y=-s.a;});
   E.bumpers.forEach((b,i)=>{b.flash*=Math.exp(-dt*6);bumpMeshes[i].scale.set(1+.25*b.flash,1,1+.25*b.flash);});
@@ -1834,7 +1940,6 @@ function tick(now){
   if(countUp){countUp.t+=dt;const k=Math.min(1,countUp.t/1.2);$('bannerAmt').textContent=(countUp.sign<0?'−':'+')+won(countUp.amt*(1-Math.pow(1-k,3)));if(k>=1)countUp=null;}
   listT+=dt;if(state!=='lobby'&&listT>.12){listT=0;refreshList();updateItemBar();updateShop();}
   if(composer)composer.render();else renderer.render(scene,camera);
-  requestAnimationFrame(tick);
 }
 setMode(mode);
 requestAnimationFrame(tick);
