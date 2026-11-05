@@ -2,6 +2,17 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
+<script>
+/* ================= Supabase 설정: 아래 두 줄에 내 프로젝트 값을 넣으세요 =================
+   Supabase 대시보드 → Project Settings → API (또는 상단 Connect 버튼) 에서 복사
+     SUPABASE_URL      : Project URL       예) 'https://abcdefghijklmn.supabase.co'
+     SUPABASE_ANON_KEY : anon public key   (eyJ... 또는 sb_publishable_... 로 시작)
+   비워 두면 게임 화면의 [온라인 대전] 탭에서 직접 입력할 수도 있어요.
+   ※ service_role(secret) 키는 절대 넣지 마세요. */
+const SUPABASE_URL='https://drxhrqekdfjbwynqxioo.supabase.co';
+const SUPABASE_ANON_KEY='sb_publishable_xoqa-kCpNBFf9C1rMBv2TQ_BqBIEwCT';
+const NET_HZ=10; // 방장이 상태를 보내는 초당 횟수 (무료 플랜이면 6~10 권장)
+</script>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <style>[hidden]{display:none!important}body{margin:0;font-size:14px}img{max-width:100%}</style>
 </head>
@@ -49,6 +60,7 @@ button{font-family:inherit}
 .hud-tl{top:calc(14px + env(safe-area-inset-top,0px));left:calc(16px + env(safe-area-inset-left,0px))}
 .clock{font-size:30px;font-weight:600;letter-spacing:.04em;font-variant-numeric:tabular-nums;color:var(--cyan);text-shadow:0 0 6px rgba(59,232,255,.5)}
 .phase{margin-top:2px;font:500 12px var(--font-b);color:var(--dim)}
+.phase.lag{color:var(--amber)}
 .hud-tr{top:calc(14px + env(safe-area-inset-top,0px));right:calc(16px + env(safe-area-inset-right,0px));display:flex;flex-direction:column;align-items:flex-end;gap:6px}
 .view-chip{font:600 12px var(--font-b);padding:5px 10px;border:1px solid var(--vc,var(--cyan));color:var(--vc,var(--cyan));border-radius:4px;background:rgba(2,3,6,.7);text-shadow:0 0 4px var(--vc,var(--cyan))}
 .hud-tr .btn{pointer-events:auto}
@@ -200,6 +212,10 @@ details[open] summary .sec-h::after{content:" −"}
 .code-in{width:130px;text-transform:uppercase;letter-spacing:.12em;color:var(--cyan)}
 .on-room{display:flex;flex-direction:column;gap:12px;padding:14px;border:1px solid rgba(59,232,255,.35);border-radius:6px}
 .room-code{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.sbcfg{display:flex;flex-direction:column;gap:10px;padding:14px;border:1px solid rgba(255,189,69,.4);border-radius:6px}
+.sbcfg .note{font-size:12px;color:var(--dim);line-height:1.55}
+.cfg-in{width:min(420px,100%);height:34px;padding:0 10px;background:#03050a;border:1px solid var(--rule);border-radius:4px;color:var(--fg);font:500 13px var(--font-d)}
+.cfg-in:focus{outline:none;border-color:var(--amber)}
 .rlink{font:500 12px var(--font-d);color:var(--fg);word-break:break-all;min-width:0;flex:1}
 .rc{font:700 34px/1 var(--font-d);letter-spacing:.18em;color:var(--cyan);text-shadow:0 0 8px rgba(59,232,255,.5)}
 .on-room .note{margin:0;font-size:12px;color:var(--dim);line-height:1.55;max-width:70ch}
@@ -362,7 +378,14 @@ details[open] summary .sec-h::after{content:" −"}
     </div>
 
     <div id="onlinePane" class="pane" hidden>
-      <div class="on-warn" id="onWarn" hidden>온라인 방에 연결할 수 없어요. 이 파일 맨 위 스크립트의 SUPABASE_URL과 SUPABASE_ANON_KEY를 내 Supabase 프로젝트 값으로 바꿨는지, 인터넷에 연결돼 있는지 확인해 주세요.</div>
+      <div class="on-warn" id="onWarn" hidden>온라인 방에 연결할 수 없어요. 아래에 Supabase 프로젝트 주소와 키를 넣거나, 파일 맨 위 설정 줄에 직접 적어 주세요.</div>
+      <div class="sbcfg" id="sbCfg" hidden>
+        <span class="sec-h">Supabase 연결 설정</span>
+        <div class="field-l"><label class="sec-h" for="sbUrl">Project URL</label><input id="sbUrl" class="cfg-in" placeholder="https://abcdefgh.supabase.co" autocomplete="off" spellcheck="false"></div>
+        <div class="field-l"><label class="sec-h" for="sbKey">anon public key</label><input id="sbKey" class="cfg-in" placeholder="eyJhbGciOi... 또는 sb_publishable_..." autocomplete="off" spellcheck="false"></div>
+        <div class="field-l"><button class="btn go" id="sbSave" type="button">저장하고 연결</button><button class="btn sm" id="sbClear" type="button">저장한 설정 지우기</button><span class="cnt" id="sbSrc"></span></div>
+        <span class="note">Supabase 대시보드 → Project Settings → API(또는 상단 Connect)에서 복사합니다. 여기 넣은 값은 이 브라우저에만 저장돼서 친구들도 각자 한 번씩 넣어야 해요. 모두가 입력 없이 쓰게 하려면 파일 맨 위 설정 줄에 적어서 올리세요.</span>
+      </div>
       <div class="field-l"><label class="sec-h" for="onName">내 이름</label><input id="onName" class="sname solo-name" maxlength="12" autocomplete="off" spellcheck="false"><span class="snew">방 잔액은 ₩10,000에서 시작 · 저장 안 됨</span></div>
       <div class="on-join" id="onJoin">
         <button class="btn go big" id="onCreate" type="button">방 만들기</button>
@@ -429,49 +452,50 @@ details[open] summary .sec-h::after{content:" −"}
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
 
-<script>
-/* ===== Supabase 설정: 여기 두 줄만 내 프로젝트 값으로 바꾸세요 =====
-   Supabase 대시보드 → Project Settings → API (또는 Connect) 에서 복사
-   - Project URL      예: https://abcdefghijklmn.supabase.co
-   - anon public key  (또는 publishable key, sb_publishable_ 로 시작) */
-const SUPABASE_URL='https://drxhrqekdfjbwynqxioo.supabase.co';
-const SUPABASE_ANON_KEY='sb_publishable_xoqa-kCpNBFf9C1rMBv2TQ_BqBIEwCT';
-/* 온라인 방 상태 전송 빈도(초당). 무료 플랜 실시간 메시지 한도를 넘지 않도록 10 정도 권장 */
-const NET_HZ=10;
-</script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script>
 /* Supabase Realtime 위에 "방" 인터페이스(join / presence / onPeers / leave)를 만든다.
    - 자주 바뀌는 값(게임 상태 g, 구매 buy)은 broadcast로 즉시 전송
    - 이름·방장 여부 같은 값은 presence(track)로도 저장해 늦게 들어온 사람도 받게 함 */
+function sbConfig(){
+  const bad=(u,k)=>!u||!k||/YOUR-PROJECT/.test(u)||/YOUR-ANON-KEY/.test(k);
+  if(!bad(SUPABASE_URL,SUPABASE_ANON_KEY))return {url:SUPABASE_URL.trim(),key:SUPABASE_ANON_KEY.trim(),src:'file'};
+  let u='',k='';try{u=localStorage.getItem('nmr-sb-url')||'';k=localStorage.getItem('nmr-sb-key')||'';}catch(e){}
+  return bad(u,k)?null:{url:u,key:k,src:'page'};
+}
 function makeSupabaseRoomApi(){
-  const unset=!SUPABASE_URL||/YOUR-PROJECT/.test(SUPABASE_URL)||!SUPABASE_ANON_KEY||/YOUR-ANON-KEY/.test(SUPABASE_ANON_KEY);
-  if(unset||!window.supabase||typeof window.supabase.createClient!=='function')return null;
-  const sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY,{realtime:{params:{eventsPerSecond:40}}});
+  const cfg=sbConfig();
+  if(!cfg||!window.supabase||typeof window.supabase.createClient!=='function')return null;
+  const sb=window.supabase.createClient(cfg.url,cfg.key,{realtime:{params:{eventsPerSecond:40},heartbeatIntervalMs:15000,worker:true}});
   const myPeer=Math.random().toString(36).slice(2,12);
   return {join:name=>new Promise((resolve,reject)=>{
     const ch=sb.channel('mr-'+name,{config:{broadcast:{self:false,ack:false},presence:{key:myPeer}}});
     let mine={},peers=[],trackTimer=null,pending=false,settled=false;
-    const extra=new Map(),handlers=[];
+    const extra=new Map(),seen=new Map(),handlers=[];
     const build=()=>{
-      const st=ch.presenceState(),keys=new Set(Object.keys(st));keys.add(myPeer);const out=[];
+      const st=ch.presenceState(),keys=new Set(Object.keys(st)),now=Date.now();keys.add(myPeer);
+      for(const [k,t] of seen)if(now-t<8000)keys.add(k);
+      const out=[];
       for(const k of keys){
         let pr;
         if(k===myPeer)pr=mine;
-        else{const metas=st[k],meta=metas&&metas[metas.length-1];if(!meta)continue;const ex=extra.get(k);pr=ex?Object.assign({},meta.s||{},ex):(meta.s||{});}
+        else{const metas=st[k],meta=metas&&metas[metas.length-1],ex=extra.get(k);if(!meta&&!ex)continue;pr=Object.assign({},meta&&meta.s||{},ex||{});if(typeof pr.nm!=='string')continue;}
         out.push({peer:k,by:null,isMe:k===myPeer,sameTab:k===myPeer,kind:'viewer',guest:false,presence:pr,updatedAt:Date.now()});
       }
       return out;
     };
     const fire=()=>{pending=false;peers=build();const c={peers,joined:[],updated:peers,left:[]};for(const h of handlers.slice()){try{h(c);}catch(e){console.error(e);}}};
     const schedule=()=>{if(pending)return;pending=true;Promise.resolve().then(fire);};
-    const scheduleTrack=()=>{clearTimeout(trackTimer);trackTimer=setTimeout(()=>{const s={};for(const k in mine)if(k!=='g')s[k]=mine[k];ch.track({s}).catch(()=>{});},150);};
+    const trackNow=()=>{const s={};for(const k in mine)if(k!=='g')s[k]=mine[k];if(Object.keys(s).length)ch.track({s}).catch(()=>{});};
+    const scheduleTrack=()=>{clearTimeout(trackTimer);trackTimer=setTimeout(trackNow,150);};
+    // re-announce periodically so a dropped presence entry (after a reconnect) comes back
+    const keep=setInterval(()=>{trackNow();const d={};for(const k in mine)if(k!=='g')d[k]=mine[k];ch.send({type:'broadcast',event:'p',payload:{peer:myPeer,d}}).catch(()=>{});schedule();},10000);
     ch.on('presence',{event:'sync'},schedule);
     ch.on('broadcast',{event:'p'},msg=>{
       const pl=msg&&msg.payload;if(!pl||typeof pl.peer!=='string'||pl.peer===myPeer||!pl.d||typeof pl.d!=='object')return;
       const nx=Object.assign({},extra.get(pl.peer)||{});
       for(const k in pl.d){if(pl.d[k]===null)delete nx[k];else nx[k]=pl.d[k];}
-      extra.set(pl.peer,nx);schedule();
+      extra.set(pl.peer,nx);seen.set(pl.peer,Date.now());schedule();
     });
     const api={name,
       presence:async patch=>{
@@ -482,10 +506,10 @@ function makeSupabaseRoomApi(){
       },
       onPeers:h=>{handlers.push(h);Promise.resolve().then(fire);return()=>{const i=handlers.indexOf(h);if(i>=0)handlers.splice(i,1);};},
       peers:()=>peers,connected:()=>true,
-      leave:async()=>{clearTimeout(trackTimer);try{await ch.untrack();}catch(e){}try{await sb.removeChannel(ch);}catch(e){}}
+      leave:async()=>{clearTimeout(trackTimer);clearInterval(keep);try{await ch.untrack();}catch(e){}try{await sb.removeChannel(ch);}catch(e){}}
     };
     ch.subscribe(status=>{
-      if(status==='SUBSCRIBED'&&!settled){settled=true;resolve(api);}
+      if(status==='SUBSCRIBED'){if(!settled){settled=true;resolve(api);}else{trackNow();schedule();}}
       else if(!settled&&(status==='CHANNEL_ERROR'||status==='TIMED_OUT'||status==='CLOSED')){settled=true;reject({code:status});}
     });
   })};
@@ -1173,7 +1197,7 @@ function updateJack(){
 }
 document.querySelectorAll('.tabs button').forEach(b=>b.addEventListener('click',()=>setMode(b.dataset.mode)));
 function renderMenu(){
-  $('menu').innerHTML=E.ORDER.map(t=>{const it=IT[t],c=priceOf(t),d=t==='coin'?`잔액 +${won(mode==='battle'?500:200)}, 짧은 가속`:it.d;return `<div class="mi"><span>${icon(t,24)}</span><span><div class="n">${it.n}</div><div class="d">${d}</div></span><span class="p ${c?'':'free'}">${c?won(c):'무료'}</span></div>`;}).join('');
+  $('menu').innerHTML=E.ORDER.filter(t=>!(mode==='online'&&t==='coin')).map(t=>{const it=IT[t],c=priceOf(t),d=t==='coin'?`잔액 +${won(mode==='battle'?500:200)}, 짧은 가속`:it.d;return `<div class="mi"><span>${icon(t,24)}</span><span><div class="n">${it.n}</div><div class="d">${d}</div></span><span class="p ${c?'':'free'}">${c?won(c):'무료'}</span></div>`;}).join('');
   $('menuCnt').textContent=`${E.ORDER.length}종 · ${mode==='battle'?'대전 가격':'시뮬레이션 가격'}`;
 }
 
@@ -1486,8 +1510,9 @@ document.querySelectorAll('.speed button').forEach(b=>b.addEventListener('click'
 // ---------- online battle: the room creator (host) runs the race and shares it through room presence;
 // everyone else renders the host's snapshot and sends item purchases in their own presence.
 const MAXON=16,ITEM_IDX=E.ORDER;
+const PUB_MIN=typeof NET_HZ==='number'&&NET_HZ>0?1/NET_HZ:.05;
 const net={api:null,room:null,code:'',host:false,client:false,me:null,hostPeer:null,members:[],roster:[],rid:0,myId:-1,
-  snap:null,snapAt:0,lastSnap:null,evSeq:0,evOut:[],lastEv:0,buyN:0,buys:[],lastBuy:{},bank:{},pubT:0,lobT:0};
+  snap:null,snapAt:0,lastSnap:null,hostMiss:0,evSeq:0,evOut:[],lastEv:0,buyN:0,buys:[],lastBuy:{},bank:{},pubT:0,lobT:0};
 let onlineName='';try{onlineName=localStorage.getItem('nmr-online-name')||'';}catch(e){}
 if(!onlineName)onlineName='플레이어'+Math.floor(100+Math.random()*900);
 const hashCode=((location.hash||'').match(/^#r-([a-z0-9]{4,8})$/)||[])[1]||'';
@@ -1502,7 +1527,7 @@ Promise.resolve(makeSupabaseRoomApi())
 function renderOnline(){
   if(mode!=='online')return;
   const ni=$('onName');if(document.activeElement!==ni)ni.value=onlineName;
-  $('onWarn').hidden=!!net.api;
+  $('onWarn').hidden=!!net.api;{const c=sbConfig();$('sbCfg').hidden=!!net.api&&!!c&&c.src==='file';if(c&&c.src==='page')$('sbSrc').textContent='이 브라우저에 저장된 설정 사용 중';$('sbClear').hidden=!(c&&c.src==='page');}
   const inRoom=!!net.room;$('onJoin').hidden=inRoom;$('onRoom').hidden=!inRoom;
   $('onCreate').disabled=!net.api;$('onEnter').disabled=!net.api;
   if(!inRoom)return;
@@ -1525,6 +1550,13 @@ $('onName').addEventListener('input',e=>{
   try{localStorage.setItem('nmr-online-name',onlineName);}catch(_){}
   if(net.room)net.room.presence({nm:onlineName}).catch(()=>{});
 });
+$('sbSave').addEventListener('click',()=>{
+  const u=$('sbUrl').value.trim().replace(/\/+$/,''),k=$('sbKey').value.trim();
+  if(!/^https:\/\/\S+$/.test(u)||k.length<20){$('sbSrc').textContent='주소(https://…)와 키를 모두 넣어 주세요';return;}
+  try{localStorage.setItem('nmr-sb-url',u);localStorage.setItem('nmr-sb-key',k);}catch(e){}
+  location.reload();
+});
+$('sbClear').addEventListener('click',()=>{try{localStorage.removeItem('nmr-sb-url');localStorage.removeItem('nmr-sb-key');}catch(e){}location.reload();});
 $('onCreate').addEventListener('click',()=>{
   const a='abcdefghjkmnpqrstuvwxyz23456789';let c='';for(let i=0;i<5;i++)c+=a[Math.floor(Math.random()*a.length)];
   joinRoom(c,true);
@@ -1553,13 +1585,13 @@ async function joinRoom(code,asHost){
   setOnErr('연결 중…');
   try{
     const r=await net.api.join('mr-'+code);
-    Object.assign(net,{room:r,code,host:asHost,client:!asHost,rid:0,snap:null,lastSnap:null,lastEv:0,evOut:[],evSeq:0,
+    Object.assign(net,{room:r,code,host:asHost,client:!asHost,rid:0,hostMiss:0,snap:null,lastSnap:null,lastEv:0,evOut:[],evSeq:0,
       buyN:0,buys:[],lastBuy:{},bank:{},hostPeer:null,myId:-1,members:[],roster:[]});
     await r.presence({nm:onlineName,jt:Date.now(),host:asHost?true:null,buy:[]});
     r.onPeers(ch=>{if(net.room===r)onRoomPeers(ch);},()=>{if(net.room===r){setOnErr('방 연결이 끊겼어요');leaveRoom();}});
     try{history.replaceState(null,'','#r-'+code);}catch(e){try{location.hash='r-'+code;}catch(_){}}
     setOnErr('');renderOnline();
-    if(!asHost)setTimeout(()=>{if(net.room===r&&!net.hostPeer){leaveRoom();setOnErr('이 코드의 방을 찾지 못했어요. 코드를 확인하거나 방장에게 다시 받아 주세요');}},7000);
+    if(!asHost)setTimeout(()=>{if(net.room===r&&!net.hostPeer&&!net.snap){leaveRoom();setOnErr('이 코드의 방을 찾지 못했어요. 코드를 확인하거나 방장에게 다시 받아 주세요');}},7000);
   }catch(e){setOnErr('방에 들어가지 못했어요'+(e&&e.code?` (${e.code})`:''));}
 }
 async function leaveRoom(){
@@ -1576,19 +1608,26 @@ function onRoomPeers(ch){
     net.hostPeer=net.me;
     for(const p of ch.updated.concat(ch.joined))if(!p.sameTab)takeBuys(p);
   }else{
-    if(net.hostPeer&&!h){leaveRoom();setOnErr('방장이 나가서 방이 닫혔어요');return;}
-    net.hostPeer=h?h.peer:null;
+    if(h){net.hostPeer=h.peer;net.hostMiss=0;}
+    else if(net.hostPeer&&!net.hostMiss)net.hostMiss=Date.now();
     if(h&&h.presence.g&&h.presence.g!==net.lastSnap){net.lastSnap=h.presence.g;onHostSnap(h.presence.g);}
   }
   if(state==='lobby')renderOnline();
 }
+setInterval(()=>{
+  if(!net.room||net.host)return;
+  const now=Date.now(),snapAge=net.snap?performance.now()-net.snapAt:1e9;
+  if(net.hostMiss&&now-net.hostMiss>15000&&snapAge>15000){leaveRoom();setOnErr('방장과 연결이 끊겨 방이 닫혔어요');return;}
+  const lag=state!=='lobby'&&snapAge>2500;
+  $('phase').classList.toggle('lag',lag);if(lag)$('phase').textContent='방장 연결이 지연되고 있어요 · 다시 연결 중…';
+},1000);
 function takeBuys(p){
   const b=p.presence.buy;if(!Array.isArray(b))return;
   const id=net.roster.findIndex(r=>r.peer===p.peer);let last=net.lastBuy[p.peer]||0;
   for(const e of b){
     if(!Array.isArray(e))continue;const n=Number(e[0])|0,t=ITEM_IDX[Number(e[1])|0];
     if(n<=last)continue;last=n;
-    if(id>=0&&state==='racing'&&t)E.buy(id,t);
+    if(id>=0&&state==='racing'&&t&&t!=='coin')E.buy(id,t);
   }
   net.lastBuy[p.peer]=last;
 }
@@ -1674,7 +1713,7 @@ function publishSnap(dt){
   let g;
   if(state==='lobby'){net.lobT-=dt;if(net.lobT>0)return;net.lobT=1;
     const bk={};for(const p of net.members)bk[p.peer]=typeof net.bank[p.peer]==='number'?net.bank[p.peer]:E.START_CHIPS;g={ph:0,bk};}
-  else{net.pubT-=dt;if(net.pubT>0)return;net.pubT=1/NET_HZ;g=encodeSnap();
+  else{net.pubT-=dt;if(net.pubT>0)return;net.pubT=Math.max(PUB_MIN,net.members.length/80);g=encodeSnap();
     while(JSON.stringify(g).length>3600&&(g.p.length||g.e.length)){if(g.p.length)g.p.pop();else g.e.shift();}}
   net.room.presence({g}).catch(()=>{});
 }
@@ -1693,7 +1732,7 @@ function buildShop(){
   const s=$('shop');s.hidden=false;
   s.innerHTML=`<div class="shop-h"><span class="sec-h">아이템 상점 · 누르면 즉시 사용</span><span class="shop-bal" id="shopBal"></span></div><div class="shop-g" id="shopG"></div>`;
   const g=$('shopG');
-  for(const t of E.ORDER){
+  for(const t of E.ORDER.filter(x=>x!=='coin')){
     const b=document.createElement('button');b.type='button';b.className='sb';b.dataset.t=t;
     const c=E.cost(t);b.innerHTML=`${icon(t,18)}<span class="n"></span><span class="p">${c?won(c):'무료'}</span>`;
     b.querySelector('.n').textContent=IT[t].n;b.title=`${IT[t].n} · ${IT[t].d}`;
@@ -1702,6 +1741,7 @@ function buildShop(){
   updateShop();
 }
 function shopBuy(t){
+  if(t==='coin')return;
   if(state!=='racing'||net.myId<0)return;
   if(net.host){E.buy(net.myId,t);return;}
   net.buyN++;net.buys.push([net.buyN,ITEM_IDX.indexOf(t)]);if(net.buys.length>8)net.buys.shift();
@@ -1774,7 +1814,7 @@ function tick(now){
   updateCam(dt);
   $('clock').textContent=fmtT(E.time);
   const n=E.marbles.length;
-  $('phase').textContent=state==='lobby'?'':state==='grid'?`출발 준비 · ${n}명 참가`:state==='racing'?(E.winner?`우승 확정 · 완주 ${E.finished}/${n}`:`레이스 중 · 완주 ${E.finished}/${n}`):`레이스 종료 · 완주 ${E.finished}/${n}`;
+  if(!$('phase').classList.contains('lag'))$('phase').textContent=state==='lobby'?'':state==='grid'?`출발 준비 · ${n}명 참가`:state==='racing'?(E.winner?`우승 확정 · 완주 ${E.finished}/${n}`:`레이스 중 · 완주 ${E.finished}/${n}`):`레이스 종료 · 완주 ${E.finished}/${n}`;
   const w=stage.clientWidth,h=stage.clientHeight;
   if(state!=='lobby'){
     for(const v of view){
